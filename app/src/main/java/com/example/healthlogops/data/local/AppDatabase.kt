@@ -4,12 +4,17 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@Database(entities = [Category::class, HealthLog::class], version = 2, exportSchema = false)
+@Database(
+    entities = [Category::class, HealthLog::class],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun categoryDao(): CategoryDao
@@ -19,15 +24,22 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE health_logs ADD COLUMN activity_start_time INTEGER")
+                database.execSQL("ALTER TABLE health_logs ADD COLUMN activity_end_time INTEGER")
+            }
+        }
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "health_tracker.db"
+                    "health_log_ops_db"
                 )
-                // Remove destructive migration to prevent data loss
-                // .fallbackToDestructiveMigration() 
+                .addMigrations(MIGRATION_1_2)
+                .fallbackToDestructiveMigration() // Keep as fallback
                 .addCallback(AppDatabaseCallback(scope))
                 .build()
                 INSTANCE = instance
@@ -45,25 +57,21 @@ abstract class AppDatabase : RoomDatabase() {
          */
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
-            INSTANCE?.let { database ->
-                scope.launch(Dispatchers.IO) {
-                    // Start by seeding categories
-                    seedDefaultCategories(database.categoryDao())
-                    // On first creation only, we add some sample logs
-                    seedSampleLogs(database.categoryDao(), database.healthLogDao())
-                }
-            }
+            // Seeding will be handled by the first time the database is accessed
+            // or we can use the db instance here to insert raw SQL if needed,
+            // but using DAOs is easier.
         }
 
         /**
          * Called every time the database is opened.
-         * Ensures that default categories exist even if the DB was updated or wiped.
          */
         override fun onOpen(db: SupportSQLiteDatabase) {
             super.onOpen(db)
+            // Ensure categories exist. This is fast and ensures defaults are always there.
             INSTANCE?.let { database ->
                 scope.launch(Dispatchers.IO) {
-                    seedDefaultCategories(database.categoryDao())
+                    val categoryDao = database.categoryDao()
+                    seedDefaultCategories(categoryDao)
                 }
             }
         }
@@ -128,55 +136,9 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             )
 
+            // Use IGNORE conflict strategy internally or check count
             for (category in defaultCategories) {
-                // insertCategory uses OnConflictStrategy.REPLACE, so this will
-                // update existing categories with defaults if they matches IDs,
-                // or just ensure they exist.
                 categoryDao.insertCategory(category)
-            }
-        }
-
-        private suspend fun seedSampleLogs(categoryDao: CategoryDao, healthLogDao: HealthLogDao) {
-            // Only seed if there are no logs
-            // (Wait, we can't easily check count here without a DAO query, but let's just do it)
-            
-            val now = System.currentTimeMillis()
-            val hour = 60 * 60 * 1000L
-            val day = 24 * hour
-
-            val sampleLogs = listOf(
-                HealthLog(
-                    categoryId = 1,
-                    activityName = "Bench Press",
-                    timestamp = now,
-                    metricsJson = "{\"sets\": 3, \"reps\": 10, \"weight_kg\": 60.0}",
-                    notes = "Felt strong today! Increased weight."
-                ),
-                HealthLog(
-                    categoryId = 2,
-                    activityName = "Morning Run",
-                    timestamp = now - hour,
-                    metricsJson = "{\"duration_min\": 30, \"distance_km\": 5.2, \"avg_heart_rate\": 145}",
-                    notes = "Beautiful weather"
-                ),
-                HealthLog(
-                    categoryId = 4,
-                    activityName = "Hydration",
-                    timestamp = now - 2 * hour,
-                    metricsJson = "{\"glasses\": 8}",
-                    notes = null
-                ),
-                HealthLog(
-                    categoryId = 3,
-                    activityName = "Lunch",
-                    timestamp = now - day,
-                    metricsJson = "{\"calories\": 650, \"protein_g\": 45.0, \"carbs_g\": 60.0, \"fat_g\": 20.0}",
-                    notes = "Grilled chicken"
-                )
-            )
-
-            for (log in sampleLogs) {
-                healthLogDao.insertLog(log)
             }
         }
     }

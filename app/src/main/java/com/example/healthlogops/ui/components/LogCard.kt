@@ -100,7 +100,7 @@ fun LogCard(
                     )
                     
                     Text(
-                        text = log.activityName,
+                        text = if (viewMode == ViewMode.DETAILED) "${log.activityName} (${category.name})" else log.activityName,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -165,7 +165,7 @@ fun LogCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = log.activityName,
+                                text = if (viewMode == ViewMode.DETAILED) "${log.activityName} (${category.name})" else log.activityName,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface,
