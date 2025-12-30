@@ -3,6 +3,7 @@ package com.example.healthlogops
 import android.app.Application
 import com.example.healthlogops.data.local.AppDatabase
 import com.example.healthlogops.data.repository.HealthLogRepository
+import com.example.healthlogops.data.repository.UserPreferencesRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 
@@ -14,4 +15,5 @@ class HealthLogApplication : Application() {
     // rather than when the application starts
     val database by lazy { AppDatabase.getDatabase(this, applicationScope) }
     val repository by lazy { HealthLogRepository(database.categoryDao(), database.healthLogDao()) }
+    val userPreferencesRepository by lazy { UserPreferencesRepository(this) }
 }

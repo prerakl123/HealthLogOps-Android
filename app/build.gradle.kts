@@ -62,6 +62,9 @@ dependencies {
     implementation("androidx.room:room-ktx:$room_version")
     ksp("androidx.room:room-compiler:$room_version")
 
+    // Jetpack DataStore Preferences
+    implementation("androidx.datastore:datastore-preferences:1.2.0")
+
     // Gson for JSON
     implementation("com.google.code.gson:gson:2.10.1")
 

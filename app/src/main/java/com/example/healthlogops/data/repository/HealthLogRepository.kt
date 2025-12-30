@@ -41,6 +41,17 @@ class HealthLogRepository(
         }
     }
 
+    fun getLogsWithCategoriesSince(startTime: Long): Flow<List<LogWithCategory>> {
+        return healthLogDao.getLogsWithCategoriesSince(startTime).map { list ->
+            list.map { healthLogWithCategory ->
+                LogWithCategory(
+                    log = healthLogWithCategory.healthLog,
+                    category = healthLogWithCategory.category
+                )
+            }
+        }
+    }
+
     fun getLogsByCategory(categoryId: Int): Flow<List<HealthLog>> {
         return healthLogDao.getLogsByCategory(categoryId)
     }
@@ -57,7 +68,21 @@ class HealthLogRepository(
         return healthLogDao.getLogById(logId)
     }
 
+    suspend fun getOldestLogTimestamp(): Long? {
+        return healthLogDao.getOldestLogTimestamp()
+    }
+
     suspend fun deleteLog(log: HealthLog) {
         healthLogDao.deleteLog(log)
+    }
+
+    /**
+     * Export all logs to a JSON string for migration.
+     */
+    suspend fun exportLogsToJson(): String {
+        return with(kotlinx.coroutines.Dispatchers.IO) {
+            val logs = healthLogDao.getAllLogsSync()
+            com.google.gson.Gson().toJson(logs)
+        }
     }
 }
