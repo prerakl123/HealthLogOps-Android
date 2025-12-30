@@ -38,6 +38,12 @@ interface HealthLogDao {
     fun getLogsWithCategoriesSince(startTime: Long): Flow<List<HealthLogWithCategory>>
 
 
+    @Query("SELECT * FROM health_logs WHERE timestamp BETWEEN :startTime AND :endTime ORDER BY timestamp DESC")
+    suspend fun getLogsInRangeSync(startTime: Long, endTime: Long): List<HealthLog>
+
+    @Query("DELETE FROM health_logs WHERE timestamp BETWEEN :startTime AND :endTime")
+    suspend fun deleteLogsInRange(startTime: Long, endTime: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLog(log: HealthLog): Long
 

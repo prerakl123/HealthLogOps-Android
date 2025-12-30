@@ -62,6 +62,11 @@ fun EditLogScreen(
     val metrics = remember { mutableStateMapOf<String, String>() }
     var customFields by remember { mutableStateOf<List<CustomFieldData>>(emptyList()) }
     var customFieldCounter by remember { mutableIntStateOf(0) }
+    
+    // New Time Editing State
+    var activityStartTime by remember { mutableStateOf<Long?>(null) }
+    var activityEndTime by remember { mutableStateOf<Long?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var isLoading by remember { mutableStateOf(true) }
     var isSaving by remember { mutableStateOf(false) }
@@ -84,6 +89,8 @@ fun EditLogScreen(
                 log = loadedLog
                 activityName = loadedLog.activityName
                 notes = loadedLog.notes ?: ""
+                activityStartTime = loadedLog.activityStartTime
+                activityEndTime = loadedLog.activityEndTime
 
                 // Parse metrics
                 val parsedMetrics = editParseMetrics(loadedLog.metricsJson)
@@ -374,6 +381,77 @@ fun EditLogScreen(
                         }
                     }
 
+                    // Activity Time (Optional)
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Activity Time (Optional)",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                // Start Time
+                                OutlinedTextField(
+                                    value = if (activityStartTime != null) formatDateTime(activityStartTime!!) else "",
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Start Time") },
+                                    placeholder = { Text("select") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            showDateTimePicker(context, activityStartTime) { timestamp ->
+                                                activityStartTime = timestamp
+                                            }
+                                        },
+                                    enabled = false, // Disable typing, handled by click
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                        disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                        disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                                
+                                // End Time
+                                OutlinedTextField(
+                                    value = if (activityEndTime != null) formatDateTime(activityEndTime!!) else "",
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("End Time") },
+                                    placeholder = { Text("select") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            showDateTimePicker(context, activityEndTime) { timestamp ->
+                                                activityEndTime = timestamp
+                                            }
+                                        },
+                                    enabled = false, // Disable typing, handled by click
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                        disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                        disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
+                            
+                            // Clear button if set
+                            if (activityStartTime != null || activityEndTime != null) {
+                                TextButton(
+                                    onClick = { 
+                                        activityStartTime = null
+                                        activityEndTime = null
+                                    },
+                                    modifier = Modifier.align(Alignment.End)
+                                ) {
+                                    Text("Clear Times")
+                                }
+                            }
+                        }
+                    }
+
                     // Notes
                     item {
                         Column(
@@ -440,13 +518,17 @@ fun EditLogScreen(
                                             categoryId = selectedCategory?.id ?: logToUpdate.categoryId,
                                             activityName = activityName.ifBlank { selectedCategory?.name ?: "" },
                                             metricsJson = Gson().toJson(allMetrics),
-                                            notes = notes.ifBlank { null }
+                                            notes = notes.ifBlank { null },
+                                            activityStartTime = activityStartTime,
+                                            activityEndTime = activityEndTime
                                         )
 
                                         viewModel.updateLog(updatedLog)
-                                        snackbarHostState.showSnackbar("Activity updated!")
                                         isSaving = false
                                         onNavigateBack()
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Activity updated!")
+                                        }
                                     }
                                 }
                             },
@@ -530,4 +612,46 @@ private fun editParseTemplateFields(templateFieldsJson: String): Map<String, Str
     } catch (_: Exception) {
         emptyMap()
     }
+}
+
+// Helper functions for Date/Time Picker
+
+private fun formatDateTime(timestamp: Long): String {
+    val sdf = java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(timestamp))
+}
+
+private fun showDateTimePicker(
+    context: android.content.Context,
+    initialTimestamp: Long?,
+    onDateTimeSelected: (Long) -> Unit
+) {
+    val calendar = java.util.Calendar.getInstance()
+    if (initialTimestamp != null) {
+        calendar.timeInMillis = initialTimestamp
+    }
+
+    android.app.DatePickerDialog(
+        context,
+        { _, year, month, dayOfMonth ->
+            calendar.set(java.util.Calendar.YEAR, year)
+            calendar.set(java.util.Calendar.MONTH, month)
+            calendar.set(java.util.Calendar.DAY_OF_MONTH, dayOfMonth)
+
+            android.app.TimePickerDialog(
+                context,
+                { _, hourOfDay, minute ->
+                    calendar.set(java.util.Calendar.HOUR_OF_DAY, hourOfDay)
+                    calendar.set(java.util.Calendar.MINUTE, minute)
+                    onDateTimeSelected(calendar.timeInMillis)
+                },
+                calendar.get(java.util.Calendar.HOUR_OF_DAY),
+                calendar.get(java.util.Calendar.MINUTE),
+                false // 12-hour format preferred
+            ).show()
+        },
+        calendar.get(java.util.Calendar.YEAR),
+        calendar.get(java.util.Calendar.MONTH),
+        calendar.get(java.util.Calendar.DAY_OF_MONTH)
+    ).show()
 }

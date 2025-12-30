@@ -23,6 +23,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.toColorInt
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
+import com.example.healthlogops.data.local.HealthLog
+import com.example.healthlogops.data.repository.HealthLogRepository
 import com.example.healthlogops.ui.components.DateGroup
 import com.example.healthlogops.ui.components.FilterChip
 import com.example.healthlogops.ui.components.getCategoryIcon
@@ -30,6 +35,7 @@ import com.example.healthlogops.ui.viewmodel.MainViewModel
 import com.example.healthlogops.ui.viewmodel.ViewMode
 import com.google.gson.Gson
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.*
 
 /**
@@ -80,6 +86,56 @@ fun HomeScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // Data Management State
+    var showExportRangePicker by remember { mutableStateOf(false) }
+    var showImportStrategyDialog by remember { mutableStateOf(false) }
+    var pendingImportLogs by remember { mutableStateOf<List<HealthLog>?>(null) }
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+
+    // Save Launcher (Local Device)
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                        outputStream.write(pendingExportJson?.toByteArray() ?: ByteArray(0))
+                    }
+                    snackbarHostState.showSnackbar("Backup saved successfully")
+                } catch (e: Exception) {
+                    snackbarHostState.showSnackbar("Failed to save: ${e.message}")
+                } finally {
+                    pendingExportJson = null
+                }
+            }
+        }
+    }
+
+    // Import Launcher
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    context.contentResolver.openInputStream(it)?.use { inputStream ->
+                        val json = inputStream.bufferedReader().use { it.readText() }
+                        val logs = viewModel.parseLogs(json)
+                        if (logs != null) {
+                            pendingImportLogs = logs
+                            showImportStrategyDialog = true
+                        } else {
+                            snackbarHostState.showSnackbar("Invalid backup file")
+                        }
+                    }
+                } catch (e: Exception) {
+                    snackbarHostState.showSnackbar("Error reading file: ${e.message}")
+                }
+            }
+        }
+    }
+
     // Extract unique categories from logs
     val categories = remember(logsWithCategories) {
         logsWithCategories
@@ -88,13 +144,39 @@ fun HomeScreen(
             .sorted()
     }
 
-    // Filter logs based on active filter
-    val filteredLogs = remember(logsWithCategories, activeFilter) {
-        if (activeFilter.isEmpty()) {
-            logsWithCategories
-        } else {
-            logsWithCategories.filter { it.category.name == activeFilter }
+    val selectedDate by viewModel.selectedDate.collectAsState()
+
+    // Filter logs based on active filter and selected date
+    val filteredLogs = remember(logsWithCategories, activeFilter, selectedDate) {
+        var logs = logsWithCategories
+        
+        // Category Filter
+        if (activeFilter.isNotEmpty()) {
+            logs = logs.filter { it.category.name == activeFilter }
         }
+        
+        // Date Filter
+        if (selectedDate != null) {
+            val filterDate = Calendar.getInstance().apply {
+                time = selectedDate!!
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.time
+            
+            logs = logs.filter { logWithCategory ->
+                 val logDate = Calendar.getInstance().apply {
+                    timeInMillis = logWithCategory.log.timestamp
+                    set(Calendar.HOUR_OF_DAY, 0)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.time
+                logDate == filterDate
+            }
+        }
+        logs
     }
 
     // Group logs by date - wrapped in remember to avoid heavy computation on every recomposition
@@ -155,66 +237,114 @@ fun HomeScreen(
                         }
                     },
                     actions = {
-                        Box {
-                            IconButton(onClick = { showMenu = true }) {
-                                Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Menu")
-                            }
+                        IconButton(onClick = { viewModel.setSelectedDate(if (selectedDate == null) Date() else null) }) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarMonth,
+                                contentDescription = "Calendar",
+                                tint = if (selectedDate != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Menu")
 
                             DropdownMenu(
                                 expanded = showMenu,
-                                onDismissRequest = { showMenu = false }
+                                onDismissRequest = { showMenu = false },
+                                modifier = Modifier.width(220.dp)
                             ) {
+                                // --- Appearance Section ---
+                                Text(
+                                    text = "Appearance",
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                
                                 DropdownMenuItem(
                                     text = { Text(if (isDarkMode) "Light Mode" else "Dark Mode") },
+                                    leadingIcon = { 
+                                        Icon(
+                                            if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode, 
+                                            contentDescription = null 
+                                        ) 
+                                    },
                                     onClick = {
                                         viewModel.toggleTheme()
                                         showMenu = false
                                     }
                                 )
 
-                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Compact View") },
+                                    leadingIcon = { Icon(Icons.Default.ViewHeadline, null) },
+                                    onClick = {
+                                        viewModel.setViewMode(ViewMode.COMPACT)
+                                        showMenu = false
+                                    },
+                                    trailingIcon = { if (viewMode == ViewMode.COMPACT) Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary) }
+                                )
 
+                                DropdownMenuItem(
+                                    text = { Text("Balanced View") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.ViewList, null) },
+                                    onClick = {
+                                        viewModel.setViewMode(ViewMode.BALANCED)
+                                        showMenu = false
+                                    },
+                                    trailingIcon = { if (viewMode == ViewMode.BALANCED) Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary) }
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Detailed View") },
+                                    leadingIcon = { Icon(Icons.Default.ViewModule, null) },
+                                    onClick = {
+                                        viewModel.setViewMode(ViewMode.DETAILED)
+                                        showMenu = false
+                                    },
+                                    trailingIcon = { if (viewMode == ViewMode.DETAILED) Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary) }
+                                )
+                                
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                // --- Data Section ---
                                 Text(
-                                    text = "View Mode",
+                                    text = "Data Management",
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
 
                                 DropdownMenuItem(
-                                    text = { Text("Compact") },
-                                    leadingIcon = { Icon(Icons.Default.ViewHeadline, null) },
+                                    text = { Text("Export Data") },
+                                    leadingIcon = { Icon(Icons.Default.Upload, null) },
                                     onClick = {
-                                        viewModel.setViewMode(ViewMode.COMPACT)
+                                        showExportRangePicker = true
                                         showMenu = false
-                                    },
-                                    trailingIcon = { if (viewMode == ViewMode.COMPACT) Text("✓") }
+                                    }
                                 )
 
                                 DropdownMenuItem(
-                                    text = { Text("Balanced") },
-                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.ViewList, null) },
+                                    text = { Text("Import Data") },
+                                    leadingIcon = { Icon(Icons.Default.Download, null) },
                                     onClick = {
-                                        viewModel.setViewMode(ViewMode.BALANCED)
+                                        importLauncher.launch("application/json")
                                         showMenu = false
-                                    },
-                                    trailingIcon = { if (viewMode == ViewMode.BALANCED) Text("✓") }
+                                    }
                                 )
 
-                                DropdownMenuItem(
-                                    text = { Text("Detailed") },
-                                    leadingIcon = { Icon(Icons.Default.ViewModule, null) },
-                                    onClick = {
-                                        viewModel.setViewMode(ViewMode.DETAILED)
-                                        showMenu = false
-                                    },
-                                    trailingIcon = { if (viewMode == ViewMode.DETAILED) Text("✓") }
-                                )
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                                HorizontalDivider()
+                                // --- Help & Info ---
+                                Text(
+                                    text = "Information",
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
 
                                 DropdownMenuItem(
                                     text = { Text("Categories") },
+                                    leadingIcon = { Icon(Icons.Default.Category, null) },
                                     onClick = {
                                         onNavigateToCategories()
                                         showMenu = false
@@ -223,30 +353,9 @@ fun HomeScreen(
 
                                 DropdownMenuItem(
                                     text = { Text("About") },
+                                    leadingIcon = { Icon(Icons.Default.Info, null) },
                                     onClick = {
                                         onNavigateToAbout()
-                                        showMenu = false
-                                    }
-                                )
-
-                                HorizontalDivider()
-
-                                DropdownMenuItem(
-                                    text = { Text("Export Data (JSON)") },
-                                    leadingIcon = { Icon(Icons.Default.Share, null) },
-                                    onClick = {
-                                        scope.launch {
-                                            val json = viewModel.exportLogs()
-                                            val sendIntent: Intent = Intent().apply {
-                                                action = Intent.ACTION_SEND
-                                                putExtra(Intent.EXTRA_TEXT, json)
-                                                type = "application/json"
-                                            }
-                                            val shareIntent = Intent.createChooser(sendIntent, "Export Health Logs")
-                                            context.startActivity(shareIntent)
-
-                                            snackbarHostState.showSnackbar("Sharing data...")
-                                        }
                                         showMenu = false
                                     }
                                 )
@@ -275,6 +384,22 @@ fun HomeScreen(
                     .fillMaxSize()
                     .padding(paddingValues)
             ) {
+                // Calendar View
+                val activityDates by viewModel.activityDates.collectAsState()
+                
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = selectedDate != null,
+                    enter = androidx.compose.animation.expandVertically(),
+                    exit = androidx.compose.animation.shrinkVertically()
+                ) {
+                    com.example.healthlogops.ui.components.CalendarView(
+                        selectedDate = selectedDate ?: Date(), // Should not be null if visible, but safe fallback
+                        activityDates = activityDates,
+                        onDateSelected = { date -> viewModel.setSelectedDate(date) },
+                        onJumpToToday = { viewModel.setSelectedDate(Date()) }
+                    )
+                }
+                
                 // Filter chips row
                 if (categories.isNotEmpty()) {
                     LazyRow(
@@ -431,14 +556,15 @@ fun HomeScreen(
                     confirmButton = {
                         TextButton(
                             onClick = {
+                                val logId = logToDelete
+                                showDeleteDialog = false
+                                logToDelete = null
                                 scope.launch {
-                                    val log = viewModel.getLogById(logToDelete!!)
+                                    val log = logId?.let { viewModel.getLogById(it) }
                                     if (log != null) {
                                         viewModel.deleteLog(log)
                                         snackbarHostState.showSnackbar("Activity deleted")
                                     }
-                                    showDeleteDialog = false
-                                    logToDelete = null
                                 }
                             }
                         ) {
@@ -633,6 +759,178 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+
+            // Export Date Range Picker
+            if (showExportRangePicker) {
+                val dateRangePickerState = rememberDateRangePickerState()
+                DatePickerDialog(
+                    onDismissRequest = { showExportRangePicker = false },
+                    confirmButton = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Option 1: Save to Device
+                            TextButton(
+                                onClick = {
+                                    val start = dateRangePickerState.selectedStartDateMillis
+                                    val end = dateRangePickerState.selectedEndDateMillis
+                                    if (start != null && end != null) {
+                                        scope.launch {
+                                            try {
+                                                val endOfDay = Calendar.getInstance().apply {
+                                                    timeInMillis = end
+                                                    set(Calendar.HOUR_OF_DAY, 23)
+                                                    set(Calendar.MINUTE, 59)
+                                                    set(Calendar.SECOND, 59)
+                                                    set(Calendar.MILLISECOND, 999)
+                                                }.timeInMillis
+
+                                                val json = viewModel.exportLogs(start, endOfDay)
+                                                pendingExportJson = json
+                                                createDocumentLauncher.launch("health_logs_backup_${System.currentTimeMillis()}.json")
+                                            } catch (e: Exception) {
+                                                snackbarHostState.showSnackbar("Export failed: ${e.message}")
+                                            }
+                                        }
+                                    }
+                                    showExportRangePicker = false
+                                }
+                            ) {
+                                Icon(Icons.Default.SaveAlt, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Save File")
+                            }
+
+                            // Option 2: Share (Current direct method)
+                            Button(
+                                onClick = {
+                                    val start = dateRangePickerState.selectedStartDateMillis
+                                    val end = dateRangePickerState.selectedEndDateMillis
+                                    if (start != null && end != null) {
+                                        scope.launch {
+                                            try {
+                                                val endOfDay = Calendar.getInstance().apply {
+                                                    timeInMillis = end
+                                                    set(Calendar.HOUR_OF_DAY, 23)
+                                                    set(Calendar.MINUTE, 59)
+                                                    set(Calendar.SECOND, 59)
+                                                    set(Calendar.MILLISECOND, 999)
+                                                }.timeInMillis
+
+                                                val json = viewModel.exportLogs(start, endOfDay)
+                                                val cacheFile = File(context.cacheDir, "health_logs_export.json")
+                                                cacheFile.writeText(json)
+                                                
+                                                val contentUri = FileProvider.getUriForFile(
+                                                    context,
+                                                    "com.example.healthlogops.fileprovider",
+                                                    cacheFile
+                                                )
+
+                                                val sendIntent: Intent = Intent().apply {
+                                                    action = Intent.ACTION_SEND
+                                                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                                                    type = "application/json"
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                }
+                                                val shareIntent = Intent.createChooser(sendIntent, "Export Health Logs")
+                                                context.startActivity(shareIntent)
+                                            } catch (e: Exception) {
+                                                snackbarHostState.showSnackbar("Export failed: ${e.message}")
+                                            }
+                                        }
+                                    }
+                                    showExportRangePicker = false
+                                }
+                            ) {
+                                Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Share")
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showExportRangePicker = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                ) {
+                    DateRangePicker(
+                        state = dateRangePickerState,
+                        modifier = Modifier.weight(1f).padding(16.dp),
+                        title = { Text("Select Export Range", modifier = Modifier.padding(16.dp)) },
+                        showModeToggle = false
+                    )
+                }
+            }
+
+            // Import Strategy Dialog
+            if (showImportStrategyDialog && pendingImportLogs != null) {
+                AlertDialog(
+                    onDismissRequest = { 
+                        showImportStrategyDialog = false
+                        pendingImportLogs = null
+                    },
+                    title = { Text("Import Strategy") },
+                    text = {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("A backup with ${pendingImportLogs!!.size} logs was found. How would you like to handle existing data?")
+                            
+                            val strategies = listOf(
+                                Triple("Merge with current data", "Keep existing logs and add imported ones.", HealthLogRepository.ImportStrategy.MERGE_ALL),
+                                Triple("Overwrite conflicts for those days", "Replace existing logs on days present in backup.", HealthLogRepository.ImportStrategy.OVERWRITE_CONFLICTS),
+                                Triple("Overwrite all in the date range", "Clear the entire backup period before importing.", HealthLogRepository.ImportStrategy.OVERWRITE_RANGE)
+                            )
+
+                            strategies.forEach { (label, description, strategy) ->
+                                Surface(
+                                    onClick = {
+                                        val logs = pendingImportLogs
+                                        showImportStrategyDialog = false
+                                        pendingImportLogs = null
+                                        scope.launch {
+                                            if (logs != null) {
+                                                val success = viewModel.importLogs(logs, strategy)
+                                                if (success) {
+                                                    snackbarHostState.showSnackbar("Import successful")
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Import failed")
+                                                }
+                                            }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {}, // Handled by strategy options
+                    dismissButton = {
+                        TextButton(onClick = { 
+                            showImportStrategyDialog = false
+                            pendingImportLogs = null
+                        }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
             }
         }
     }

@@ -396,17 +396,35 @@ fun AddLogScreen(
 
                                     val metricsJson = Gson().toJson(metrics)
 
+                                    // Determine timestamp based on selected date
+                                    val selectedDate = viewModel.selectedDate.value
+                                    val timestamp = if (selectedDate != null) {
+                                        // Use selected date but keep current time of day
+                                        val now = java.util.Calendar.getInstance()
+                                        val cal = java.util.Calendar.getInstance().apply { time = selectedDate }
+                                        cal.set(java.util.Calendar.HOUR_OF_DAY, now.get(java.util.Calendar.HOUR_OF_DAY))
+                                        cal.set(java.util.Calendar.MINUTE, now.get(java.util.Calendar.MINUTE))
+                                        cal.set(java.util.Calendar.SECOND, now.get(java.util.Calendar.SECOND))
+                                        cal.timeInMillis
+                                    } else {
+                                        System.currentTimeMillis()
+                                    }
+
                                     val healthLog = HealthLog(
                                         categoryId = category.id,
                                         activityName = activityName.ifBlank { category.name },
-                                        timestamp = System.currentTimeMillis(),
+                                        timestamp = timestamp,
                                         metricsJson = metricsJson,
                                         notes = notes.ifBlank { null }
                                     )
 
                                     viewModel.insertLog(healthLog)
-                                    snackbarHostState.showSnackbar("Activity logged!")
+                                    // Navigate back immediately so the UI feels responsive
                                     onNavigateBack()
+                                    // Launch snackbar in a separate job so it doesn't block (though it might be cut off by navigation)
+                                    scope.launch { 
+                                        snackbarHostState.showSnackbar("Activity logged!") 
+                                    }
                                 }
                             }
                         },

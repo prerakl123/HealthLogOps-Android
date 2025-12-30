@@ -4,12 +4,17 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@Database(entities = [Category::class, HealthLog::class], version = 2, exportSchema = false)
+@Database(
+    entities = [Category::class, HealthLog::class],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun categoryDao(): CategoryDao
@@ -19,15 +24,22 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE health_logs ADD COLUMN activity_start_time INTEGER")
+                database.execSQL("ALTER TABLE health_logs ADD COLUMN activity_end_time INTEGER")
+            }
+        }
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "health_tracker.db"
+                    "health_log_ops_db"
                 )
-                // Remove destructive migration to prevent data loss
-                // .fallbackToDestructiveMigration() 
+                .addMigrations(MIGRATION_1_2)
+                .fallbackToDestructiveMigration() // Keep as fallback
                 .addCallback(AppDatabaseCallback(scope))
                 .build()
                 INSTANCE = instance
