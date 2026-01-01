@@ -60,6 +60,7 @@ fun HomeScreen(
     onNavigateToEditLog: (Int) -> Unit,
     onNavigateToAbout: () -> Unit,
     onNavigateToCategories: () -> Unit,
+    onNavigateToProfile: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val logsWithCategories by viewModel.logsWithCategories.collectAsState()
@@ -179,9 +180,11 @@ fun HomeScreen(
         logs
     }
 
+    val daysToLoadState by viewModel.daysToLoad.collectAsState()
+
     // Group logs by date - wrapped in remember to avoid heavy computation on every recomposition
-    val logsByDate = remember(filteredLogs) {
-        filteredLogs.groupBy { logWithCategory ->
+    val logsByDate = remember(filteredLogs, daysToLoadState, selectedDate) {
+        val groups = filteredLogs.groupBy { logWithCategory ->
             val calendar = Calendar.getInstance()
             calendar.timeInMillis = logWithCategory.log.timestamp
             calendar.set(Calendar.HOUR_OF_DAY, 0)
@@ -189,11 +192,41 @@ fun HomeScreen(
             calendar.set(Calendar.SECOND, 0)
             calendar.set(Calendar.MILLISECOND, 0)
             calendar.time
-        }.toSortedMap(compareByDescending { it })
+        }.toMutableMap()
+
+        // Ensure all dates in the loaded range exist in the map when no specific date is selected
+        if (selectedDate == null) {
+            val calendar = Calendar.getInstance()
+            calendar.set(Calendar.HOUR_OF_DAY, 0)
+            calendar.set(Calendar.MINUTE, 0)
+            calendar.set(Calendar.SECOND, 0)
+            calendar.set(Calendar.MILLISECOND, 0)
+            
+            for (i in 0 until daysToLoadState) {
+                val date = calendar.time
+                if (!groups.containsKey(date)) {
+                    groups[date] = emptyList()
+                }
+                calendar.add(Calendar.DAY_OF_YEAR, -1)
+            }
+        } else {
+            // If a specific date is selected and no logs found, ensure it appears in the list
+            val selDateHeader = Calendar.getInstance().apply {
+                time = selectedDate!!
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.time
+            if (!groups.containsKey(selDateHeader)) {
+                groups[selDateHeader] = emptyList()
+            }
+        }
+        groups.toSortedMap(compareByDescending { it })
     }
 
-    // Calculate today's count (from all logs, not filtered)
-    val today = Calendar.getInstance().apply {
+    // Today's Date for count
+    val todayDate = Calendar.getInstance().apply {
         set(Calendar.HOUR_OF_DAY, 0)
         set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0)
@@ -208,7 +241,7 @@ fun HomeScreen(
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.time
-        logDate == today
+        logDate == todayDate
     }
 
     val isProcessing by viewModel.isProcessing.collectAsState()
@@ -237,6 +270,13 @@ fun HomeScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = onNavigateToProfile) {
+                            Icon(
+                                imageVector = Icons.Default.AccountCircle,
+                                contentDescription = "Profile",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                         IconButton(onClick = { viewModel.setSelectedDate(if (selectedDate == null) Date() else null) }) {
                             Icon(
                                 imageVector = Icons.Default.CalendarMonth,
@@ -252,7 +292,7 @@ fun HomeScreen(
                                 onDismissRequest = { showMenu = false },
                                 modifier = Modifier.width(220.dp)
                             ) {
-                                // --- Appearance Section ---
+                                // Appearance Section
                                 Text(
                                     text = "Appearance",
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -306,7 +346,7 @@ fun HomeScreen(
                                 
                                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                                // --- Data Section ---
+                                // Data Section
                                 Text(
                                     text = "Data Management",
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -334,7 +374,7 @@ fun HomeScreen(
 
                                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                                // --- Help & Info ---
+                                // Help & Info
                                 Text(
                                     text = "Information",
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -393,7 +433,7 @@ fun HomeScreen(
                     exit = androidx.compose.animation.shrinkVertically()
                 ) {
                     com.example.healthlogops.ui.components.CalendarView(
-                        selectedDate = selectedDate ?: Date(), // Should not be null if visible, but safe fallback
+                        selectedDate = selectedDate ?: Date(), 
                         activityDates = activityDates,
                         onDateSelected = { date -> viewModel.setSelectedDate(date) },
                         onJumpToToday = { viewModel.setSelectedDate(Date()) }
@@ -408,7 +448,6 @@ fun HomeScreen(
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // "All" filter chip
                         item {
                             FilterChip(
                                 text = "All",
@@ -417,7 +456,6 @@ fun HomeScreen(
                             )
                         }
 
-                        // Category filter chips
                         items(categories) { category ->
                             FilterChip(
                                 text = category,
@@ -428,9 +466,10 @@ fun HomeScreen(
                     }
                 }
 
-                // Logs content
-                if (filteredLogs.isEmpty()) {
-                    // Empty state
+                // Logs list
+                if (logsByDate.isEmpty()) {
+                    // This case should only happen if daysToLoad is 0 (not possible)
+                    // or if some extreme filtering makes logsByDate empty.
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -446,19 +485,13 @@ fun HomeScreen(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
                             Text(
-                                text = if (activeFilter.isEmpty()) "No logs yet" else "No $activeFilter logs",
+                                text = "No activities found",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "Tap + to add your first activity",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
                     }
                 } else {
-                    // Logs list
                     val listState = rememberLazyListState()
                     val canLoadMore by remember {
                         derivedStateOf {
@@ -512,12 +545,12 @@ fun HomeScreen(
                                     .padding(16.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                val currentDays by viewModel.daysToLoad.collectAsState()
+                                val currentShowDays = daysToLoadState
                                 val totalDays by viewModel.totalDaysAvailable.collectAsState()
 
                                 TextButton(
                                     onClick = { 
-                                        if (currentDays >= totalDays) {
+                                        if (currentShowDays >= totalDays) {
                                             scope.launch {
                                                 snackbarHostState.showSnackbar("You've reached the beginning of your history!")
                                             }
@@ -526,7 +559,7 @@ fun HomeScreen(
                                     }
                                 ) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text("Showing $currentDays of $totalDays logging days")
+                                        Text("Showing $currentShowDays of $totalDays logging days")
                                         Text(
                                             text = "Load more history",
                                             style = MaterialTheme.typography.labelLarge,

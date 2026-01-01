@@ -6,16 +6,29 @@ import androidx.lifecycle.viewModelScope
 import com.example.healthlogops.data.local.HealthLog
 import com.example.healthlogops.data.repository.HealthLogRepository
 import com.example.healthlogops.data.repository.UserPreferencesRepository
+import com.example.healthlogops.util.ErrorManager
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 enum class ViewMode { COMPACT, BALANCED, DETAILED }
 
 class MainViewModel(
     private val repository: HealthLogRepository,
-    private val userPreferencesRepository: UserPreferencesRepository
+    private val userPreferencesRepository: UserPreferencesRepository,
+    private val sessionManager: com.example.healthlogops.data.repository.SessionManager
 ) : ViewModel() {
-    val allCategories = repository.allCategories.stateIn(
+    private val currentUserId = sessionManager.userId.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
+
+    val allCategories = currentUserId.flatMapLatest { userId ->
+        if (userId != null) repository.getAllCategoriesByUser(userId)
+        else flowOf(emptyList())
+    }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -29,9 +42,15 @@ class MainViewModel(
     val totalDaysAvailable: StateFlow<Int> = _totalDaysAvailable.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val logsWithCategories = _daysToLoad.flatMapLatest { days ->
-        val startTime = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
-        repository.getLogsWithCategoriesSince(startTime)
+    val logsWithCategories = combine(currentUserId, _daysToLoad) { userId, days ->
+        Pair(userId, days)
+    }.flatMapLatest { (userId, days) ->
+        if (userId != null) {
+            val startTime = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
+            repository.getLogsWithCategoriesSince(startTime, userId)
+        } else {
+            flowOf(emptyList())
+        }
     }.onEach {
         updateTotalDaysAvailable()
     }.stateIn(
@@ -41,8 +60,9 @@ class MainViewModel(
     )
 
     private fun updateTotalDaysAvailable() {
-        viewModelScope.launch {
-            val oldestTimestamp = repository.getOldestLogTimestamp()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val userId = currentUserId.value ?: return@launch
+            val oldestTimestamp = repository.getOldestLogTimestamp(userId)
             if (oldestTimestamp != null) {
                 val diffMillis = System.currentTimeMillis() - oldestTimestamp
                 val days = (diffMillis / (24 * 60 * 60 * 1000L)).toInt() + 1
@@ -107,6 +127,7 @@ class MainViewModel(
                 cal.timeInMillis
             }.toSet()
         }
+        .flowOn(kotlinx.coroutines.Dispatchers.Default)
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -149,7 +170,11 @@ class MainViewModel(
     suspend fun insertLog(log: HealthLog) {
         _isProcessing.value = true
         try {
-            repository.insertLog(log)
+            val userId = currentUserId.value ?: "default_user"
+            repository.insertLog(log.copy(userId = userId))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ErrorManager.emitError("Failed to insert log: ${e.localizedMessage}")
         } finally {
             _isProcessing.value = false
         }
@@ -161,7 +186,11 @@ class MainViewModel(
     suspend fun updateLog(log: HealthLog) {
         _isProcessing.value = true
         try {
-            repository.updateLog(log)
+            val userId = currentUserId.value ?: "default_user"
+            repository.updateLog(log.copy(userId = userId))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ErrorManager.emitError("Failed to update log: ${e.localizedMessage}")
         } finally {
             _isProcessing.value = false
         }
@@ -174,6 +203,9 @@ class MainViewModel(
         _isProcessing.value = true
         try {
             repository.deleteLog(log)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ErrorManager.emitError("Failed to delete log: ${e.localizedMessage}")
         } finally {
             _isProcessing.value = false
         }
@@ -183,7 +215,8 @@ class MainViewModel(
      * Get a specific log by ID.
      */
     suspend fun getLogById(logId: Int): HealthLog? {
-        return repository.getLogById(logId)
+        val userId = currentUserId.value ?: "default_user"
+        return repository.getLogById(userId, logId)
     }
 
     /**
@@ -192,7 +225,12 @@ class MainViewModel(
     suspend fun exportLogs(startTime: Long, endTime: Long): String {
         _isProcessing.value = true
         return try {
-            repository.exportLogsToJson(startTime, endTime)
+            val userId = currentUserId.value ?: "default_user"
+            repository.exportLogsToJson(userId, startTime, endTime)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ErrorManager.emitError("Failed to export logs: ${e.localizedMessage}")
+            ""
         } finally {
             _isProcessing.value = false
         }
@@ -211,21 +249,44 @@ class MainViewModel(
     suspend fun importLogs(logs: List<HealthLog>, strategy: HealthLogRepository.ImportStrategy): Boolean {
         _isProcessing.value = true
         return try {
-            repository.importLogsWithStrategy(logs, strategy)
+            val userId = currentUserId.value ?: "default_user"
+            repository.importLogsWithStrategy(logs, strategy, userId)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ErrorManager.emitError("Failed to import logs: ${e.localizedMessage}")
+            false
         } finally {
             _isProcessing.value = false
+        }
+    }
+
+    /**
+     * Analyze meal notes using AI.
+     */
+    suspend fun analyzeMealNotes(notes: String): com.example.healthlogops.data.remote.MealAnalysisResponse? {
+        return try {
+            com.example.healthlogops.data.remote.NetworkClient.analysisApi.analyzeMeal(
+                com.example.healthlogops.data.remote.AnalysisRequest(notes)
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+            com.example.healthlogops.data.remote.MealAnalysisResponse(
+                status = "error",
+                message = e.localizedMessage ?: "Unknown network error"
+            )
         }
     }
 }
 
 class MainViewModelFactory(
     private val repository: HealthLogRepository,
-    private val userPreferencesRepository: UserPreferencesRepository
+    private val userPreferencesRepository: UserPreferencesRepository,
+    private val sessionManager: com.example.healthlogops.data.repository.SessionManager
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return MainViewModel(repository, userPreferencesRepository) as T
+            return MainViewModel(repository, userPreferencesRepository, sessionManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

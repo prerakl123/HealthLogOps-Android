@@ -9,6 +9,8 @@ object Routes {
     const val EDIT_LOG = "edit_log/{logId}"
     const val ABOUT = "about"
     const val CATEGORIES = "categories"
+    const val LOGIN = "login"
+    const val PROFILE = "profile"
     
     fun editLog(logId: Int) = "edit_log/$logId"
 }

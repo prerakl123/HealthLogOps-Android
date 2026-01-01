@@ -14,6 +14,10 @@ class HealthLogRepository(
 ) {
     // Category Operations
     val allCategories: Flow<List<Category>> = categoryDao.getAllCategories()
+    
+    fun getAllCategoriesByUser(userId: String): Flow<List<Category>> {
+        return categoryDao.getAllCategoriesByUser(userId)
+    }
 
     suspend fun insertCategory(category: Category) {
         categoryDao.insertCategory(category)
@@ -24,14 +28,16 @@ class HealthLogRepository(
     }
 
     // Log Operations
-    val allLogs: Flow<List<HealthLog>> = healthLogDao.getAllLogs()
+    fun getAllLogs(userId: String): Flow<List<HealthLog>> {
+        return healthLogDao.getAllLogs(userId)
+    }
     
     /**
      * Get recent logs with their associated categories.
      * Converts Room's HealthLogWithCategory to UI's LogWithCategory.
      */
-    fun getLogsWithCategories(limit: Int = 100): Flow<List<LogWithCategory>> {
-        return healthLogDao.getLogsWithCategories(limit).map { list ->
+    fun getLogsWithCategories(userId: String, limit: Int = 100): Flow<List<LogWithCategory>> {
+        return healthLogDao.getLogsWithCategories(userId, limit).map { list ->
             list.map { healthLogWithCategory ->
                 LogWithCategory(
                     log = healthLogWithCategory.healthLog,
@@ -41,8 +47,8 @@ class HealthLogRepository(
         }
     }
 
-    fun getLogsWithCategoriesSince(startTime: Long): Flow<List<LogWithCategory>> {
-        return healthLogDao.getLogsWithCategoriesSince(startTime).map { list ->
+    fun getLogsWithCategoriesSince(startTime: Long, userId: String): Flow<List<LogWithCategory>> {
+        return healthLogDao.getLogsWithCategoriesSince(startTime, userId).map { list ->
             list.map { healthLogWithCategory ->
                 LogWithCategory(
                     log = healthLogWithCategory.healthLog,
@@ -52,8 +58,8 @@ class HealthLogRepository(
         }
     }
 
-    fun getLogsByCategory(categoryId: Int): Flow<List<HealthLog>> {
-        return healthLogDao.getLogsByCategory(categoryId)
+    fun getLogsByCategory(userId: String, categoryId: Int): Flow<List<HealthLog>> {
+        return healthLogDao.getLogsByCategory(userId, categoryId)
     }
 
     suspend fun insertLog(log: HealthLog) {
@@ -64,12 +70,12 @@ class HealthLogRepository(
         healthLogDao.updateLog(log)
     }
     
-    suspend fun getLogById(logId: Int): HealthLog? {
-        return healthLogDao.getLogById(logId)
+    suspend fun getLogById(userId: String, logId: Int): HealthLog? {
+        return healthLogDao.getLogById(userId, logId)
     }
 
-    suspend fun getOldestLogTimestamp(): Long? {
-        return healthLogDao.getOldestLogTimestamp()
+    suspend fun getOldestLogTimestamp(userId: String): Long? {
+        return healthLogDao.getOldestLogTimestamp(userId)
     }
 
     suspend fun deleteLog(log: HealthLog) {
@@ -79,9 +85,9 @@ class HealthLogRepository(
     /**
      * Export logs within a date range to a JSON string.
      */
-    suspend fun exportLogsToJson(startTime: Long, endTime: Long): String {
+    suspend fun exportLogsToJson(userId: String, startTime: Long, endTime: Long): String {
         return with(kotlinx.coroutines.Dispatchers.IO) {
-            val logs = healthLogDao.getLogsInRangeSync(startTime, endTime)
+            val logs = healthLogDao.getLogsInRangeSync(userId, startTime, endTime)
             com.google.gson.Gson().toJson(logs)
         }
     }
@@ -90,7 +96,6 @@ class HealthLogRepository(
         MERGE_ALL,          // Just insert everything (might create duplicates)
         OVERWRITE_RANGE,    // Clear the specific range of the imported logs before inserting
         OVERWRITE_CONFLICTS,// (Advanced) Only overwrite if same timestamp+activity exists. 
-                            // For simplicity, we'll implement user's 4 specific choices.
     }
 
     /**
@@ -110,7 +115,8 @@ class HealthLogRepository(
      */
     suspend fun importLogsWithStrategy(
         logs: List<HealthLog>,
-        strategy: ImportStrategy
+        strategy: ImportStrategy,
+        userId: String
     ): Boolean {
         return with(kotlinx.coroutines.Dispatchers.IO) {
             try {
@@ -122,18 +128,9 @@ class HealthLogRepository(
                 when (strategy) {
                     ImportStrategy.OVERWRITE_RANGE -> {
                         // Delete ALL logs in the database within the date range of the imported file
-                        healthLogDao.deleteLogsInRange(minTimestamp, maxTimestamp)
+                        healthLogDao.deleteLogsInRange(userId, minTimestamp, maxTimestamp)
                     }
                     ImportStrategy.OVERWRITE_CONFLICTS -> {
-                        // Implementation for "overwrite conflicts for that day":
-                        // Actually the user asks for:
-                        // 1. Overwrite logs for that day (if conflicts arise)
-                        // 2. Merge with available logs
-                        // 3. Overwrite all in range
-                        // 4. Merge all in range
-                        // We'll map these in the ViewModel. 
-                        // For "overwrite conflicts for that day", we'll delete logs only on the days that have logs in the import.
-                        
                         val daysWithLogs = logs.map { 
                             val cal = java.util.Calendar.getInstance()
                             cal.timeInMillis = it.timestamp
@@ -146,7 +143,7 @@ class HealthLogRepository(
 
                         daysWithLogs.forEach { dayStart ->
                             val dayEnd = dayStart + (24 * 60 * 60 * 1000L) - 1
-                            healthLogDao.deleteLogsInRange(dayStart, dayEnd)
+                            healthLogDao.deleteLogsInRange(userId, dayStart, dayEnd)
                         }
                     }
                     ImportStrategy.MERGE_ALL -> {
@@ -154,9 +151,11 @@ class HealthLogRepository(
                     }
                 }
 
-                // Insert all logs. Note: PK 'id' is reset to 0 to trigger auto-generation and avoid ID conflicts.
+                // Insert all logs. Note: PK 'id' is reset to 0.
+                // WE MUST provide the userId here to the copy() method because
+                // GSON might have deserialized it as null if it was missing from the JSON.
                 logs.forEach { 
-                    healthLogDao.insertLog(it.copy(id = 0)) 
+                    healthLogDao.insertLog(it.copy(id = 0, userId = userId)) 
                 }
                 true
             } catch (e: Exception) {

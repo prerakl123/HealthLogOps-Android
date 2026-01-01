@@ -11,14 +11,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 @Database(
-    entities = [Category::class, HealthLog::class],
-    version = 2,
+    entities = [Category::class, HealthLog::class, User::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun categoryDao(): CategoryDao
     abstract fun healthLogDao(): HealthLogDao
+    abstract fun userDao(): UserDao
 
     companion object {
         @Volatile
@@ -31,6 +32,36 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Create users table
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `users` (
+                        `userId` TEXT NOT NULL, 
+                        `password` TEXT NOT NULL, 
+                        `email` TEXT NOT NULL, 
+                        `age` INTEGER, 
+                        `height` REAL, 
+                        `weight` REAL, 
+                        `profileParameters` TEXT NOT NULL, 
+                        PRIMARY KEY(`userId`)
+                    )
+                """.trimIndent())
+                
+                // Add user_id to health_logs
+                database.execSQL("ALTER TABLE health_logs ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default_user'")
+                
+                // Add userId to categories
+                database.execSQL("ALTER TABLE categories ADD COLUMN userId TEXT NOT NULL DEFAULT 'default_user'")
+                
+                // Seed default user for existing data
+                database.execSQL("""
+                    INSERT OR IGNORE INTO users (userId, password, email, profileParameters) 
+                    VALUES ('default_user', 'default_pass', 'user@example.com', '{}')
+                """.trimIndent())
+            }
+        }
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -38,7 +69,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "health_log_ops_db"
                 )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .fallbackToDestructiveMigration() // Keep as fallback
                 .addCallback(AppDatabaseCallback(scope))
                 .build()

@@ -28,6 +28,7 @@ data class HealthLog(
     val timestamp: Long, // Epoch millis
     val metricsJson: String, // JSON String of metric values
     val notes: String?,
+    @ColumnInfo(name = "user_id", defaultValue = "default_user") val userId: String = "default_user",
     @ColumnInfo(name = "activity_start_time") val activityStartTime: Long? = null,
     @ColumnInfo(name = "activity_end_time") val activityEndTime: Long? = null
 )

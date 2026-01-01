@@ -9,5 +9,6 @@ data class Category(
     val name: String,
     val icon: String, // Material Icon name
     val color: String, // Hex color string
-    val templateJson: String // JSON String defining the fields
+    val templateJson: String, // JSON String defining the fields
+    val userId: String = "default_user" // Added for multi-user support
 )

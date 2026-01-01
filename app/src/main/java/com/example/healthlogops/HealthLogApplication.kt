@@ -15,5 +15,7 @@ class HealthLogApplication : Application() {
     // rather than when the application starts
     val database by lazy { AppDatabase.getDatabase(this, applicationScope) }
     val repository by lazy { HealthLogRepository(database.categoryDao(), database.healthLogDao()) }
+    val userRepository by lazy { com.example.healthlogops.data.repository.UserRepository(database.userDao()) }
+    val sessionManager by lazy { com.example.healthlogops.data.repository.SessionManager(this) }
     val userPreferencesRepository by lazy { UserPreferencesRepository(this) }
 }

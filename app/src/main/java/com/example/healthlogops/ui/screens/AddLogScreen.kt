@@ -69,6 +69,11 @@ fun AddLogScreen(
         selectedCategory?.let { viewModel.getActivitySuggestions(it.id) } ?: emptyList()
     }
 
+    // AI Analysis states
+    var showAnalysisDialog by remember { mutableStateOf(false) }
+    var analysisResult by remember { mutableStateOf<com.example.healthlogops.data.remote.MealAnalysisResponse?>(null) }
+    var isAnalyzing by remember { mutableStateOf(false) }
+
     val snackbarHostState = remember { SnackbarHostState() }
     val isProcessing by viewModel.isProcessing.collectAsState()
 
@@ -332,14 +337,60 @@ fun AddLogScreen(
                     }
                 }
 
-                // Notes Section
+                // Notes Section with AI Analysis
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "Notes (Optional)",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Notes (Optional)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            if (selectedCategory?.name == "Meal") {
+                                TextButton(
+                                    onClick = {
+                                        if (notes.isBlank()) {
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar("Please enter some notes first.")
+                                            }
+                                            return@TextButton
+                                        }
+                                        
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Starting analysis...")
+                                            isAnalyzing = true
+                                            val result = viewModel.analyzeMealNotes(notes)
+                                            analysisResult = result
+                                            isAnalyzing = false
+                                            
+                                            if (result != null) {
+                                                if (result.status == "success") {
+                                                    showAnalysisDialog = true
+                                                } else if (result.status == "invalid") {
+                                                    snackbarHostState.showSnackbar("Invalid note data: ${result.reason}")
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Analysis failed: ${result.message}")
+                                                }
+                                            } else {
+                                                snackbarHostState.showSnackbar("Analysis failed: Unknown error")
+                                            }
+                                        }
+                                    },
+                                    enabled = !isAnalyzing && notes.isNotBlank()
+                                ) {
+                                    if (isAnalyzing) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                    Text("Detect Metrics (AI)")
+                                }
+                            }
+                        }
 
                         OutlinedTextField(
                             value = notes,
@@ -347,7 +398,7 @@ fun AddLogScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(120.dp),
-                            placeholder = { Text("Add any additional notes...") },
+                            placeholder = { Text("Describe your activity...") },
                             maxLines = 5
                         )
                     }
@@ -467,6 +518,90 @@ fun AddLogScreen(
                     }
                 }
             }
+        }
+
+        // Analysis Result Dialog
+        if (showAnalysisDialog && analysisResult != null) {
+            val metrics = analysisResult?.metrics ?: emptyMap()
+            
+            AlertDialog(
+                onDismissRequest = { showAnalysisDialog = false },
+                title = { Text("AI Analysis Result") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Detected nutritional metrics from your notes:")
+                        
+                        metrics.forEach { (key, value) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(text = value.toString())
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "How would you like to update your log?",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            // Merge: Keep existing, update/add new from AI
+                            val newValues = templateFieldValues.toMutableMap()
+                            metrics.forEach { (key, value) ->
+                                if (newValues.containsKey(key)) {
+                                    newValues[key] = value.toString()
+                                }
+                            }
+                            templateFieldValues = newValues
+                            showAnalysisDialog = false
+                            scope.launch {
+                                snackbarHostState.showSnackbar("Metrics updated (Merged)")
+                            }
+                        }
+                    ) {
+                        Text("Merge")
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                // Replace: Clear and use AI values
+                                val newValues = templateFieldValues.toMutableMap()
+                                // Clear existing first (optional, but 'replace' implies this)
+                                // Actually, 'replace' in this context usually means replace the specific fields detected.
+                                // If the user wants a full replace, we should clear the map first.
+                                newValues.keys.forEach { newValues[it] = "" }
+                                metrics.forEach { (key, value) ->
+                                    if (newValues.containsKey(key)) {
+                                        newValues[key] = value.toString()
+                                    }
+                                }
+                                templateFieldValues = newValues
+                                showAnalysisDialog = false
+                                scope.launch {
+                                    snackbarHostState.showSnackbar("Metrics updated (Replaced)")
+                                }
+                            }
+                        ) {
+                            Text("Replace")
+                        }
+                        TextButton(onClick = { showAnalysisDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                }
+            )
         }
     }
 }

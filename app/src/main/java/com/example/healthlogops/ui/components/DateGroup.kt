@@ -18,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import java.text.SimpleDateFormat
 import java.util.*
@@ -40,7 +41,7 @@ fun DateGroup(
     viewMode: ViewMode = ViewMode.BALANCED,
     onLongPress: ((Int) -> Unit)? = null
 ) {
-    var isExpanded by remember { mutableStateOf(true) }
+    var isExpanded by rememberSaveable { mutableStateOf(true) }
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -63,7 +64,7 @@ fun DateGroup(
             
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(
-                    text = "${logs.size} log${if (logs.size > 1) "s" else ""}",
+                    text = if (logs.isEmpty()) "0 logs" else "${logs.size} log${if (logs.size > 1) "s" else ""}",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
@@ -77,17 +78,29 @@ fun DateGroup(
             }
         }
         
-        // Log cards
+        // Log cards or Empty Placeholder
         if (isExpanded) {
-            logs.forEach { logWithCategory ->
-                SwipeableLogCard(
-                    logWithCategory = logWithCategory,
-                    onEdit = onEdit,
-                    onDelete = onDelete,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    viewMode = viewMode,
-                    onLongPress = { onLongPress?.invoke(logWithCategory.log.id) }
+            if (logs.isEmpty()) {
+                Text(
+                    text = "No logs for this date",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
+            } else {
+                logs.forEach { logWithCategory ->
+                    SwipeableLogCard(
+                        logWithCategory = logWithCategory,
+                        onEdit = onEdit,
+                        onDelete = onDelete,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        viewMode = viewMode,
+                        onLongPress = { onLongPress?.invoke(logWithCategory.log.id) }
+                    )
+                }
             }
         }
     }
